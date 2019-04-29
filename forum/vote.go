@@ -6,27 +6,27 @@ import (
 
 // NewVote is an action representing a simple vote to be broadcast
 // through the chain network.
-func NewVote(voter eos.AccountName, proposition, propositionHash, voteValue string) *eos.Action {
+func NewVote(voter eos.AccountName, proposalName eos.Name, voteValue uint8, voteJSON string) *eos.Action {
 	a := &eos.Action{
-		Account: AN("eosforumtest"),
+		Account: ForumAN,
 		Name:    ActN("vote"),
 		Authorization: []eos.PermissionLevel{
 			{Actor: voter, Permission: eos.PermissionName("active")},
 		},
 		ActionData: eos.NewActionData(Vote{
-			Voter:           voter,
-			Proposition:     proposition,
-			PropositionHash: propositionHash,
-			VoteValue:       voteValue,
+			Voter:        voter,
+			ProposalName: proposalName,
+			Vote:         voteValue,
+			VoteJSON:     voteJSON,
 		}),
 	}
 	return a
 }
 
-// Vote represents the `eosforumtest::vote` action.
+// Vote represents the `eosio.forum::vote` action.
 type Vote struct {
-	Voter           eos.AccountName `json:"voter"`
-	Proposition     string          `json:"proposition"`
-	PropositionHash string          `json:"proposition_hash"`
-	VoteValue       string          `json:"vote_value"`
+	Voter        eos.AccountName `json:"voter"`
+	ProposalName eos.Name        `json:"proposal_name"`
+	Vote         uint8           `json:"vote"`
+	VoteJSON     string          `json:"vote_json"`
 }

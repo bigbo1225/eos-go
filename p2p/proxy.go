@@ -1,187 +1,128 @@
 package p2p
 
 import (
-	"net"
-
-	"bufio"
 	"fmt"
+
+	"github.com/pkg/errors"
+
+	"go.uber.org/zap"
 
 	"github.com/eoscanada/eos-go"
 )
 
-type actionType int
-
-const (
-	addRoute actionType = iota
-)
-
-type routeAction struct {
-	actionType actionType
-	route      *Route
+type Proxy struct {
+	Peer1                       *Peer
+	Peer2                       *Peer
+	handlers                    []Handler
+	waitingOriginHandShake      bool
+	waitingDestinationHandShake bool
 }
 
-type routeCommunication struct {
-	Route                 *Route `json:"route"`
-	DestinationConnection net.Conn
-	Envelope              *eos.P2PMessageEnvelope
-}
-
-var routerActionChannel = make(chan routeAction)
-
-func (p *Proxy) handleRouteAction(channel chan routeAction) {
-
-	for routeAction := range channel {
-		//todo : handle action type
-		go p.startForwarding(routeAction.route)
+func NewProxy(peer1 *Peer, peer2 *Peer) *Proxy {
+	return &Proxy{
+		Peer1: peer1,
+		Peer2: peer2,
 	}
 }
 
-var transmissionChannel = make(chan routeCommunication)
+func (p *Proxy) RegisterHandler(handler Handler) {
+	p.handlers = append(p.handlers, handler)
+}
 
-func (p *Proxy) handleTransmission(channel chan routeCommunication) {
+func (p *Proxy) RegisterHandlers(handlers []Handler) {
+	p.handlers = append(p.handlers, handlers...)
+}
 
-	for communication := range channel {
+func (p *Proxy) read(sender *Peer, receiver *Peer, errChannel chan error) {
+	for {
 
-		//_, err := communication.DestinationConnection.Write(communication.Envelope.Payload)
-		//buf := new(bytes.Buffer)
-		//encoder := eos.NewEncoder(buf)
-		//err := encoder.Encode(communication.Envelope)
-		//if err != nil {
-		//	fmt.Println("Sender encode error: ", err)
-		//}
-
-		//fmt.Println("Data to send: ", hex.EncodeToString(buf.Bytes()))
-
-		_, err := communication.DestinationConnection.Write(communication.Envelope.Raw)
+		//p2pLog.Debug("Waiting for packet")
+		packet, err := sender.Read()
+		//p2pLog.Debug("Received for packet")
 		if err != nil {
-			fmt.Println("Sender comm error: ", err)
+			errChannel <- errors.Wrapf(err, "read message from %s", sender.Address)
+			return
 		}
-
-	}
-}
-
-var router = make(chan routeCommunication)
-var routingChannels []chan routeCommunication
-
-func (p *Proxy) handleRouting(routingChannel chan routeCommunication) {
-
-	for communication := range routingChannel {
-		for _, channel := range routingChannels {
-
-			channel <- communication
+		err = p.handle(packet, sender, receiver)
+		if err != nil {
+			errChannel <- err
 		}
 	}
 }
 
-var postProcessChannel = make(chan routeCommunication)
+func (p *Proxy) handle(packet *eos.Packet, sender *Peer, receiver *Peer) error {
 
-func (p *Proxy) handlePostProcess(postProcessChannel chan routeCommunication, postProcessorChannels []chan Message) {
-
-	for communication := range postProcessChannel {
-
-		pp := Message{
-			Route:    communication.Route,
-			Envelope: communication.Envelope,
-		}
-
-		for _, c := range postProcessorChannels {
-			c <- pp
-		}
-	}
-}
-
-func (p *Proxy) handlePluginPostProcess(handle Handler, channel chan Message) {
-
-	for postProcessable := range channel {
-		handle.Handle(postProcessable)
-	}
-}
-
-func (p *Proxy) startForwarding(route *Route) {
-
-	fmt.Printf("Starting forwarding [%s] -> [%s] \n", route.From, route.To)
-
-	ln, err := net.Listen("tcp", route.From)
+	_, err := receiver.Write(packet.Raw)
 	if err != nil {
-		fmt.Println("error: ", err)
-		return
+		return errors.Wrapf(err, "handleDefault")
 	}
 
-	for {
-		fmt.Printf("Accepting connection on port [%s]\n", route.From)
-		fromConn, err := ln.Accept()
-		if err != nil {
-			fmt.Println("error: ", err)
-		}
-		fmt.Printf("Connection on port [%s]\n", route.From)
-
-		toConn, err := net.Dial("tcp", route.To)
-		if err != nil {
-			fmt.Println("error: ", err)
-			fromConn.Close()
-		} else {
-			fmt.Println("Connected to: ", route.To)
-			go p.handleConnection(fromConn, toConn, route)
-			go p.handleConnection(toConn, fromConn, &Route{From: route.To, To: route.From})
-		}
+	switch m := packet.P2PMessage.(type) {
+	case *eos.GoAwayMessage:
+		return errors.Errorf("handling message: go away: reason [%d]", m.Reason)
 	}
+
+	envelope := NewEnvelope(sender, receiver, packet)
+
+	for _, handle := range p.handlers {
+		handle.Handle(envelope)
+	}
+
+	return nil
 }
 
-func (p *Proxy) handleConnection(connection net.Conn, forwardConnection net.Conn, route *Route) (err error) {
+func triggerHandshake(peer *Peer) error {
+	return peer.SendHandshake(peer.handshakeInfo)
+}
 
-	r := bufio.NewReader(connection)
+func (p *Proxy) ConnectAndStart() error {
 
+	p2pLog.Info("Connecting and starting proxy")
+
+	errorChannel := make(chan error)
+
+	peer1ReadyChannel := p.Peer1.Connect(errorChannel)
+	peer2ReadyChannel := p.Peer2.Connect(errorChannel)
+
+	peer1Ready := false
+	peer2Ready := false
 	for {
 
-		envelope, err := eos.ReadP2PMessageData(r)
-		if err != nil {
-			fmt.Printf("WARNING: Connection from [%s] to [%s] : %s\n ", route.From, route.To, err)
-			forwardConnection.Close()
-			//log.Fatal("Handle connection, ", err)
+		select {
+		case <-peer1ReadyChannel:
+			peer1Ready = true
+		case <-peer2ReadyChannel:
+			peer2Ready = true
+		case err := <-errorChannel:
 			return err
 		}
+		if peer1Ready && peer2Ready {
+			break
+		}
+	}
 
-		router <- routeCommunication{
-			Route:                 route,
-			DestinationConnection: forwardConnection,
-			Envelope:              envelope,
+	return p.Start()
+
+}
+
+func (p *Proxy) Start() error {
+	p2pLog.Info("Starting readers",
+		zap.String("peer1", p.Peer1.Address),
+		zap.String("peer1", p.Peer2.Address))
+	errorChannel := make(chan error)
+	go p.read(p.Peer1, p.Peer2, errorChannel)
+	go p.read(p.Peer2, p.Peer1, errorChannel)
+
+	if p.Peer2.handshakeInfo != nil {
+		err := triggerHandshake(p.Peer2)
+		if err != nil {
+			return fmt.Errorf("connect and start: trigger handshake: %s", err)
 		}
 
-	}
-}
-
-type Proxy struct {
-	Routes   []*Route
-	Handlers []Handler
-}
-
-func (p *Proxy) Start() {
-
-	done := make(chan bool)
-
-	var postProcessorChannels []chan Message
-
-	for _, plugin := range p.Handlers {
-
-		pc := make(chan Message)
-		postProcessorChannels = append(postProcessorChannels, pc)
-		go p.handlePluginPostProcess(plugin, pc)
-
+		return errors.Wrap(triggerHandshake(p.Peer2),
+			"connect and start: trigger handshake")
 	}
 
-	routingChannels = []chan routeCommunication{transmissionChannel, postProcessChannel}
-
-	go p.handleRouteAction(routerActionChannel)
-	go p.handleRouting(router)
-	go p.handleTransmission(transmissionChannel)
-	go p.handlePostProcess(postProcessChannel, postProcessorChannels)
-
-	for _, route := range p.Routes {
-
-		routerActionChannel <- routeAction{actionType: addRoute, route: route}
-	}
-
-	fmt.Println("Proxy started")
-	<-done
-	fmt.Println("Proxy will stop")
+	//p2pLog.Info("Started")
+	return <-errorChannel
 }

@@ -8,52 +8,85 @@ import (
 	eos "github.com/eoscanada/eos-go"
 )
 
-func NewSetCodeTx(account eos.AccountName, wasmPath, abiPath string) (out *eos.Transaction, err error) {
+func NewSetContract(account eos.AccountName, wasmPath, abiPath string) (out []*eos.Action, err error) {
+	codeAction, err := NewSetCode(account, wasmPath)
+	if err != nil {
+		return nil, err
+	}
+
+	abiAction, err := NewSetABI(account, abiPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return []*eos.Action{codeAction, abiAction}, nil
+}
+
+func NewSetCode(account eos.AccountName, wasmPath string) (out *eos.Action, err error) {
 	codeContent, err := ioutil.ReadFile(wasmPath)
 	if err != nil {
 		return nil, err
 	}
 
+	return &eos.Action{
+		Account: AN("eosio"),
+		Name:    ActN("setcode"),
+		Authorization: []eos.PermissionLevel{
+			{
+				Actor:      account,
+				Permission: eos.PermissionName("active"),
+			},
+		},
+		ActionData: eos.NewActionData(SetCode{
+			Account:   account,
+			VMType:    0,
+			VMVersion: 0,
+			Code:      eos.HexBytes(codeContent),
+		}),
+	}, nil
+}
+
+func NewSetABI(account eos.AccountName, abiPath string) (out *eos.Action, err error) {
 	abiContent, err := ioutil.ReadFile(abiPath)
 	if err != nil {
 		return nil, err
 	}
 
-	var abiDef eos.ABI
-	if err := json.Unmarshal(abiContent, &abiDef); err != nil {
-		return nil, fmt.Errorf("unmarshal ABI file: %s", err)
+	var abiPacked []byte
+	if len(abiContent) > 0 {
+		var abiDef eos.ABI
+		if err := json.Unmarshal(abiContent, &abiDef); err != nil {
+			return nil, fmt.Errorf("unmarshal ABI file: %s", err)
+		}
+
+		abiPacked, err = eos.MarshalBinary(abiDef)
+		if err != nil {
+			return nil, fmt.Errorf("packing ABI: %s", err)
+		}
 	}
 
-	abiPacked, err := eos.MarshalBinary(abiDef)
+	return &eos.Action{
+		Account: AN("eosio"),
+		Name:    ActN("setabi"),
+		Authorization: []eos.PermissionLevel{
+			{
+				Actor:      account,
+				Permission: eos.PermissionName("active"),
+			},
+		},
+		ActionData: eos.NewActionData(SetABI{
+			Account: account,
+			ABI:     eos.HexBytes(abiPacked),
+		}),
+	}, nil
+}
+
+// NewSetCodeTx is _deprecated_. Use NewSetContract instead, and build
+// your transaction yourself.
+func NewSetCodeTx(account eos.AccountName, wasmPath, abiPath string) (out *eos.Transaction, err error) {
+	actions, err := NewSetContract(account, wasmPath, abiPath)
 	if err != nil {
-		return nil, fmt.Errorf("packing ABI: %s", err)
-	}
-
-	actions := []*eos.Action{
-		{
-			Account: AN("eosio"),
-			Name:    ActN("setcode"),
-			Authorization: []eos.PermissionLevel{
-				{account, eos.PermissionName("active")},
-			},
-			ActionData: eos.NewActionData(SetCode{
-				Account:   account,
-				VMType:    0,
-				VMVersion: 0,
-				Code:      eos.HexBytes(codeContent),
-			}),
-		},
-		{
-			Account: AN("eosio"),
-			Name:    ActN("setabi"),
-			Authorization: []eos.PermissionLevel{
-				{account, eos.PermissionName("active")},
-			},
-			ActionData: eos.NewActionData(SetABI{
-				Account: account,
-				ABI:     eos.HexBytes(abiPacked),
-			}),
-		},
+		return nil, err
 	}
 	return &eos.Transaction{Actions: actions}, nil
 }

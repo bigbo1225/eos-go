@@ -2,8 +2,10 @@ package eos
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"reflect"
 )
 
 // See: libraries/chain/include/eosio/chain/contracts/types.hpp:203
@@ -14,7 +16,7 @@ type SetCode struct {
 	Account   AccountName `json:"account"`
 	VMType    byte        `json:"vmtype"`
 	VMVersion byte        `json:"vmversion"`
-	Code      HexBytes    `json:"bytes"`
+	Code      HexBytes    `json:"code"`
 }
 
 // SetABI represents the hard-coded `setabi` action.
@@ -31,6 +33,23 @@ type Action struct {
 	ActionData
 }
 
+func (a Action) Digest() Checksum256 {
+	toEat := jsonActionToServer{
+		Account:       a.Account,
+		Name:          a.Name,
+		Authorization: a.Authorization,
+		Data:          a.ActionData.HexData,
+	}
+	bin, err := MarshalBinary(toEat)
+	if err != nil {
+		panic("this should never panic, we know it marshals properly all the time")
+	}
+
+	h := sha256.New()
+	_, _ = h.Write(bin)
+	return h.Sum(nil)
+}
+
 type ActionData struct {
 	HexData  HexBytes    `json:"hex_data,omitempty"`
 	Data     interface{} `json:"data,omitempty" eos:"-"`
@@ -45,6 +64,15 @@ func NewActionData(obj interface{}) ActionData {
 		toServer: true,
 	}
 }
+
+func NewActionDataFromHexData(data []byte) ActionData {
+	return ActionData{
+		HexData:  data,
+		Data:     nil,
+		toServer: true,
+	}
+}
+
 func (a *ActionData) SetToServer(toServer bool) {
 	// FIXME: let's clarify this design, make it simpler..
 	// toServer doesn't speak of the intent..
@@ -69,18 +97,11 @@ type jsonActionFromServer struct {
 }
 
 func (a *Action) MarshalJSON() ([]byte, error) {
-	println(fmt.Sprintf("MarshalJSON toServer? %t", a.toServer))
-
 	if a.toServer {
-		buf := new(bytes.Buffer)
-		encoder := NewEncoder(buf)
-
-		println("MarshalJSON, encoding action data to binary")
-		if err := encoder.Encode(a.ActionData.Data); err != nil {
+		data, err := a.ActionData.EncodeActionData()
+		if err != nil {
 			return nil, err
 		}
-		data := buf.Bytes()
-		println("MarshalJSON data length : ", len(data)) /**/
 
 		return json.Marshal(&jsonActionToServer{
 			Account:       a.Account,
@@ -97,4 +118,55 @@ func (a *Action) MarshalJSON() ([]byte, error) {
 		HexData:       a.HexData,
 		Data:          a.Data,
 	})
+}
+
+func (data *ActionData) EncodeActionData() ([]byte, error) {
+	if data.Data == nil {
+		return data.HexData, nil
+	}
+
+	buf := new(bytes.Buffer)
+	encoder := NewEncoder(buf)
+
+	if err := encoder.Encode(data.Data); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (a *Action) MapToRegisteredAction() error {
+	src, ok := a.ActionData.Data.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	actionMap := RegisteredActions[a.Account]
+
+	var decodeInto reflect.Type
+	if actionMap != nil {
+		objType := actionMap[a.Name]
+		if objType != nil {
+			decodeInto = objType
+		}
+	}
+	if decodeInto == nil {
+		return nil
+	}
+
+	obj := reflect.New(decodeInto)
+	objIface := obj.Interface()
+
+	cnt, err := json.Marshal(src)
+	if err != nil {
+		return fmt.Errorf("marshaling data: %s", err)
+	}
+	err = json.Unmarshal(cnt, objIface)
+	if err != nil {
+		return fmt.Errorf("json unmarshal into registered actions: %s", err)
+	}
+
+	a.ActionData.Data = objIface
+
+	return nil
 }

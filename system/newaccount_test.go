@@ -15,13 +15,16 @@ import (
 // TODO: Move this test to the `system` contract.. and take out
 // `NewAccount` from this package.
 func TestActionNewAccount(t *testing.T) {
-	pubKey, err := ecc.NewPublicKey("PUB_K1_6MRyAjQq8ud7hVNYcfnVPJqcVpscN5So8BhtHuGYqET5GDW5CV")
+	pubKey, err := ecc.NewPublicKey("EOS6MRyAjQq8ud7hVNYcfnVPJqcVpscN5So8BhtHuGYqET5GDW5CV")
 	require.NoError(t, err)
 	a := &eos.Action{
 		Account: eos.AccountName("eosio"),
 		Name:    eos.ActionName("newaccount"),
 		Authorization: []eos.PermissionLevel{
-			{eos.AccountName("eosio"), eos.PermissionName("active")},
+			{
+				Actor:      eos.AccountName("eosio"),
+				Permission: eos.PermissionName("active"),
+			},
 		},
 		ActionData: eos.NewActionData(NewAccount{
 			Creator: eos.AccountName("eosio"),
@@ -63,7 +66,7 @@ func TestActionNewAccount(t *testing.T) {
 	buf, err = json.Marshal(a.ActionData.Data)
 	assert.NoError(t, err)
 
-	assert.Equal(t, "{\"creator\":\"eosio\",\"name\":\"abourget\",\"owner\":{\"threshold\":1,\"keys\":[{\"key\":\"EOS6MRyAjQq8ud7hVNYcfnVPJqcVpscN5So8BhtHuGYqET5GDW5CV\",\"weight\":1}],\"accounts\":null,\"waits\":null},\"active\":{\"threshold\":1,\"keys\":[{\"key\":\"EOS6MRyAjQq8ud7hVNYcfnVPJqcVpscN5So8BhtHuGYqET5GDW5CV\",\"weight\":1}],\"accounts\":null,\"waits\":null}}", string(buf))
+	assert.Equal(t, "{\"creator\":\"eosio\",\"name\":\"abourget\",\"owner\":{\"threshold\":1,\"keys\":[{\"key\":\"EOS6MRyAjQq8ud7hVNYcfnVPJqcVpscN5So8BhtHuGYqET5GDW5CV\",\"weight\":1}]},\"active\":{\"threshold\":1,\"keys\":[{\"key\":\"EOS6MRyAjQq8ud7hVNYcfnVPJqcVpscN5So8BhtHuGYqET5GDW5CV\",\"weight\":1}]}}", string(buf))
 	// 00096e88 0000 0000 00000000 00 00 00 00 01 0000000000ea3055
 
 	// WUTz that ?
@@ -78,7 +81,10 @@ func TestMarshalTransactionAndSigned(t *testing.T) {
 		Account: eos.AccountName("eosio"),
 		Name:    eos.ActionName("newaccount"),
 		Authorization: []eos.PermissionLevel{
-			{eos.AccountName("eosio"), eos.PermissionName("active")},
+			{
+				Actor:      eos.AccountName("eosio"),
+				Permission: eos.PermissionName("active"),
+			},
 		},
 		ActionData: eos.NewActionData(NewAccount{
 			Creator: eos.AccountName("eosio"),
@@ -101,7 +107,7 @@ func TestMarshalTransactionAndSigned(t *testing.T) {
 
 	buf, err = json.Marshal(a)
 	assert.NoError(t, err)
-	assert.Equal(t, `{"account":"eosio","name":"newaccount","authorization":[{"actor":"eosio","permission":"active"}],"data":"0000000000ea305500000059b1abe931000000000000000000000000000000000000"}`, string(buf))
+	assert.Equal(t, `{"account":"eosio","name":"newaccount","authorization":[{"actor":"eosio","permission":"active"}],"data":"0000000000ea305500000059b1abe9310000000000000000000000000000"}`, string(buf))
 }
 
 func TestMarshalTransactionAndPack(t *testing.T) {
@@ -109,7 +115,10 @@ func TestMarshalTransactionAndPack(t *testing.T) {
 		Account: eos.AccountName("eosio"),
 		Name:    eos.ActionName("newaccount"),
 		Authorization: []eos.PermissionLevel{
-			{eos.AccountName("eosio"), eos.PermissionName("active")},
+			{
+				Actor:      eos.AccountName("eosio"),
+				Permission: eos.PermissionName("active"),
+			},
 		},
 		ActionData: eos.NewActionData(NewAccount{
 			Creator: eos.AccountName("eosio"),
@@ -120,7 +129,10 @@ func TestMarshalTransactionAndPack(t *testing.T) {
 		Account: eos.AccountName("eosio"),
 		Name:    eos.ActionName("transfer"),
 		Authorization: []eos.PermissionLevel{
-			{eos.AccountName("eosio"), eos.PermissionName("active")},
+			{
+				Actor:      eos.AccountName("eosio"),
+				Permission: eos.PermissionName("active"),
+			},
 		},
 		ActionData: eos.NewActionData(NewAccount{
 			Creator: eos.AccountName("eosio"),
@@ -139,7 +151,7 @@ func TestMarshalTransactionAndPack(t *testing.T) {
 	buf, err = json.Marshal(signedTx)
 	fmt.Println("Signed Transaction: ", string(buf))
 
-	packedTx, err := signedTx.Pack(eos.TxOptions{})
+	packedTx, err := signedTx.Pack(eos.CompressionNone)
 	assert.NoError(t, err)
 
 	buf, err = json.Marshal(packedTx)
